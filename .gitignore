@@ -1,0 +1,5 @@
+.cache
+.env
+.library_cache
+*.pyc
+__pycache__/
