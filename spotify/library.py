@@ -6,6 +6,7 @@ from typing import Dict, List
 import pandas as pd
 
 from .connection import Connection
+from .constants import DEFAULT_ALBUM_LIMIT, DEFAULT_TRACK_LIMIT
 
 
 class Library:
@@ -25,7 +26,10 @@ class Library:
         return
 
     def load_user_albums(
-        self, query: bool = False, n: int = 1000, sort_by: str = None
+        self,
+        query: bool = False,
+        n: int = DEFAULT_ALBUM_LIMIT,
+        sort_by: str = None
     ):
 
         cache_fp = os.path.join(self._cache_dir, "albums.csv")
@@ -77,14 +81,81 @@ class Library:
 
         return pd.DataFrame(albums)
 
+    def load_user_tracks(
+        self,
+        query: bool = False,
+        n: int = DEFAULT_TRACK_LIMIT,
+        sort_by: str = None
+    ):
+
+        cache_fp = os.path.join(self._cache_dir, "tracks.csv")
+        if query or not os.path.exists(cache_fp):
+            records = self._connection.query_user_tracks(n=n)
+            self.tracks = self._parse_track_records(records)
+            self.tracks.set_index("id", inplace=True)
+            self.tracks.to_csv(cache_fp)
+        else:
+            if self.tracks is None:
+                self.tracks = pd.read_csv(
+                    cache_fp,
+                    converters={
+                        "artists": literal_eval
+                    }
+                ).set_index("id")
+
+        if sort_by is not None:
+            self.tracks.sort_values(sort_by, inplace=True)
+
+        return
+
+    def _parse_track_records(self, track_records: List[Dict]) -> pd.DataFrame:
+
+        tracks = []
+
+        for track_record in track_records:
+            track = {}
+            track["id"] = track_record["track"]["id"]
+            track["title"] = track_record["track"]["name"]
+            track["artists"] = list(set([
+                artist_record["name"]
+                for artist_record in track_record["track"]["artists"]
+            ]))
+            track["album"] = track_record["track"]["album"]["name"]
+            track["album_id"] = track_record["track"]["album"]["id"]
+            track["released"] = pd.to_datetime(
+                track_record["track"]["album"]["release_date"]
+            )
+            tracks.append(track)
+
+        return pd.DataFrame(tracks)
+
     def get_albums_by_artist(
         self, artist: str, include_secondary: bool = False
     ) -> pd.DataFrame:
 
         if include_secondary:
-            return self.albums[
-                (self.albums.artist == artist) |
-                (self.albums.secondary_artists.apply(lambda x: artist in x))
-            ]
+            secondary_mask = (
+                self.albums.secondary_artists.apply(lambda x: artist in x)
+            )
         else:
-            return self.albums[self.albums.artist == artist]
+            secondary_mask = pd.Series([False] * len(self.albums))
+
+        return self.albums[(self.albums.artist == artist) | secondary_mask]
+
+    def get_tracks_by_artist(self, artist: str) -> pd.DataFrame:
+
+        return self.tracks[self.tracks.artists.apply(lambda x: artist in x)]
+
+    def get_tracks_from_album(
+        self, album: str, artist: str = None
+    ) -> pd.DataFrame:
+
+        if artist is None:
+            album_id = self.albums[self.albums.title == album].iloc(0).album_id
+        else:
+            artist_albums = self.get_albums_by_artist(artist)
+            album_id = artist_albums[
+                artist_albums.title == album
+            ].iloc(0).album_id
+
+        return self.tracks(self.tracks.album_id == album_id)
