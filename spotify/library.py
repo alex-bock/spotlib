@@ -77,6 +77,14 @@ class Library:
 
         return pd.DataFrame(albums)
 
-    def get_albums_by_artist(self, artist: str) -> pd.DataFrame:
+    def get_albums_by_artist(
+        self, artist: str, include_secondary: bool = False
+    ) -> pd.DataFrame:
 
-        return self.albums[self.albums.artist == artist]
+        if include_secondary:
+            return self.albums[
+                (self.albums.artist == artist) |
+                (self.albums.secondary_artists.apply(lambda x: artist in x))
+            ]
+        else:
+            return self.albums[self.albums.artist == artist]
