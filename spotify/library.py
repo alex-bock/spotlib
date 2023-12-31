@@ -5,8 +5,9 @@ import requests
 import time
 from typing import Dict, List
 
+import math
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageStat
 import plotly.graph_objects as go
 
 from .connection import Connection
@@ -175,39 +176,86 @@ class Library:
 
         return
 
-    def generate_album_collage(self, dim: int = 10, sort_by: str = None):
+    def generate_album_collage(
+        self,
+        dim: int = 10,
+        sort_by: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        gradient: bool = False,
+        fn: str = None
+    ):
 
-        albums = self.albums
         n = dim ** 2
+        albums = self.albums
+
+        if start_date is not None:
+            albums = albums[albums.released >= start_date]
+        if end_date is not None:
+            albums = albums[albums.released < end_date]
+        if len(albums) < n:
+            dim = math.floor(math.log2(len(albums)))
+            n = dim ** 2
+
         if sort_by:
             albums = albums.sort_values(sort_by).head(n)
         else:
             albums = albums.sample(n)
 
-        cover_fps = []
+        self._pull_album_covers(albums)
+        albums["cover_img"] = self._load_cover_images(albums)
+
+        if gradient:
+            albums["cover_brightness"] = albums.cover_img.apply(
+                lambda x: ImageStat.Stat(x.convert("L")).mean[0]
+            )
+            albums.sort_values(
+                "cover_brightness", inplace=True, ascending=False
+            )
+
+        collage = self._build_collage_image(albums, dim)
+
+        if fn is None:
+            fn = f"{str(int(time.time()))}.png"
+        collage.save(os.path.join(self.collage_dir, fn))
+
+        return
+    
+    def _pull_album_covers(self, albums: pd.DataFrame):
+
         for id, album in albums.iterrows():
             cover_fp = os.path.join(self.cover_dir, f"{id}.png")
             if not os.path.exists(cover_fp):
                 with open(cover_fp, "wb") as f:
                     f.write(requests.get(album.cover_url).content)
-            cover_fps.append(cover_fp)
         
-        collage = Image.new(
+        return
+    
+    def _load_cover_images(self, albums: pd.DataFrame) -> pd.Series:
+
+        cover_imgs = albums.index.map(
+            lambda x: Image.open(
+                os.path.join(self.cover_dir, f"{x}.png")
+            ).resize(
+                (COLLAGE_COVER_DIM, COLLAGE_COVER_DIM)
+            )
+        )
+
+        return cover_imgs
+    
+    def _build_collage_image(self, albums: pd.DataFrame, dim: int) -> Image:
+
+        collage_img = Image.new(
             "RGB", (COLLAGE_COVER_DIM * dim, COLLAGE_COVER_DIM * dim)
         )
         for i in range(dim):
             for j in range(dim):
-                image = Image.open(
-                    cover_fps[(i * dim) + j]).resize(
-                        (COLLAGE_COVER_DIM, COLLAGE_COVER_DIM)
-                    )
-                collage.paste(
-                    image, (COLLAGE_COVER_DIM * j, COLLAGE_COVER_DIM * i)
+                collage_img.paste(
+                    albums.iloc[(i * dim) + j].cover_img,
+                    (COLLAGE_COVER_DIM * j, COLLAGE_COVER_DIM * i)
                 )
-        
-        collage.save(os.path.join(self.collage_dir, f"{str(int(time.time()))}.png"))
 
-        return
+        return collage_img
 
     def get_tracks_by_artist(self, artist: str) -> pd.DataFrame:
 
