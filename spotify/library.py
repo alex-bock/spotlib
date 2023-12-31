@@ -4,6 +4,7 @@ import os
 from typing import Dict, List
 
 import pandas as pd
+import plotly.graph_objects as go
 
 from .connection import Connection
 from .constants import DEFAULT_ALBUM_LIMIT, DEFAULT_TRACK_LIMIT
@@ -142,6 +143,24 @@ class Library:
 
         return self.albums[(self.albums.artist == artist) | secondary_mask]
 
+    def view_albums_by_release_date(self, year_res: float = 1.0):
+
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=self.albums.released,
+                    xbins={
+                        "start": self.albums.released.min(),
+                        "end": self.albums.released.max(),
+                        "size": "M" + str(int(year_res * 12))
+                    }
+                )
+            ]
+        )
+        fig.show()
+
+        return
+
     def get_tracks_by_artist(self, artist: str) -> pd.DataFrame:
 
         return self.tracks[self.tracks.artists.apply(lambda x: artist in x)]
@@ -159,3 +178,21 @@ class Library:
             ].iloc(0).album_id
 
         return self.tracks(self.tracks.album_id == album_id)
+
+    def view_tracks_by_release_date(self, year_res: int = 1.0):
+
+        fig = go.Figure(
+            data=[
+                go.Histogram(
+                    x=self.tracks.released,
+                    xbins={
+                        "start": self.tracks.released.min(),
+                        "end": self.tracks.released.max(),
+                        "size": "M" + str(int(year_res * 12))
+                    }
+                )
+            ]
+        )
+        fig.show()
+
+        return
