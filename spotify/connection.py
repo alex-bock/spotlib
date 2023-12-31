@@ -64,7 +64,6 @@ class Connection:
                 records.extend(batch)
             n_records += batch_size
             offset += SPOTIPY_LIMIT
-            print(offset)
 
         return records
 

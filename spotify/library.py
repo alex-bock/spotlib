@@ -1,13 +1,19 @@
 
 from ast import literal_eval
 import os
+import requests
+import time
 from typing import Dict, List
 
 import pandas as pd
+from PIL import Image
 import plotly.graph_objects as go
 
 from .connection import Connection
 from .constants import DEFAULT_ALBUM_LIMIT, DEFAULT_TRACK_LIMIT
+
+
+COLLAGE_COVER_DIM = 800
 
 
 class Library:
@@ -23,6 +29,14 @@ class Library:
         self.artists = None
         self.albums = None
         self.tracks = None
+
+        self.cover_dir = os.path.join(self._cache_dir, "album_covers/")
+        self.collage_dir = os.path.join(self._cache_dir, "album_collages/")
+
+        if not os.path.exists(self.cover_dir):
+            os.makedirs(self.cover_dir)
+        if not os.path.exists(self.collage_dir):
+            os.makedirs(self.collage_dir)
 
         return
 
@@ -158,6 +172,40 @@ class Library:
             ]
         )
         fig.show()
+
+        return
+
+    def generate_album_collage(self, dim: int = 10, sort_by: str = None):
+
+        albums = self.albums
+        n = dim ** 2
+        if sort_by:
+            albums = albums.sort_values(sort_by).head(n)
+        else:
+            albums = albums.sample(n)
+
+        cover_fps = []
+        for id, album in albums.iterrows():
+            cover_fp = os.path.join(self.cover_dir, f"{id}.png")
+            if not os.path.exists(cover_fp):
+                with open(cover_fp, "wb") as f:
+                    f.write(requests.get(album.cover_url).content)
+            cover_fps.append(cover_fp)
+        
+        collage = Image.new(
+            "RGB", (COLLAGE_COVER_DIM * dim, COLLAGE_COVER_DIM * dim)
+        )
+        for i in range(dim):
+            for j in range(dim):
+                image = Image.open(
+                    cover_fps[(i * dim) + j]).resize(
+                        (COLLAGE_COVER_DIM, COLLAGE_COVER_DIM)
+                    )
+                collage.paste(
+                    image, (COLLAGE_COVER_DIM * j, COLLAGE_COVER_DIM * i)
+                )
+        
+        collage.save(os.path.join(self.collage_dir, f"{str(int(time.time()))}.png"))
 
         return
 
