@@ -74,3 +74,9 @@ class Connection:
         )
 
         return result["items"]
+    
+    def query_artist(self, id: str) -> Dict:
+
+        result = self._connection.artist(id)
+
+        return result

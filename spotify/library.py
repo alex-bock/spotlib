@@ -141,6 +141,13 @@ class Library:
             track["released"] = pd.to_datetime(
                 track_record["track"]["album"]["release_date"]
             )
+            track["genres"] = list(set([
+                genre for artist_record in [
+                    self._connection.query_artist(artist["id"])
+                    for artist in track_record["track"]["artists"]
+                ]
+                for genre in artist_record["genres"]
+            ]))
             tracks.append(track)
 
         return pd.DataFrame(tracks)
