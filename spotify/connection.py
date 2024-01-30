@@ -1,17 +1,21 @@
 
 from dotenv import load_dotenv
-from typing import Dict, List
+from typing import Dict
 
 import spotipy as sp
 from spotipy.oauth2 import SpotifyOAuth
-
-from .constants import DEFAULT_ALBUM_LIMIT, DEFAULT_TRACK_LIMIT
 
 
 load_dotenv()
 
 DEFAULT_SCOPE = "user-library-read"
 SPOTIPY_LIMIT = 20
+
+DEFAULT_RECORD_LIMITS = {
+    "album": 1000,
+    "artist": 1000,
+    "track": 5000
+}
 
 
 class Connection:
@@ -25,7 +29,10 @@ class Connection:
 
         return
 
-    def query_user_albums(self, n: int = DEFAULT_ALBUM_LIMIT) -> List[Dict]:
+    def query_user_records(self, record_type: str, n: int = None):
+
+        if n is None:
+            n = DEFAULT_RECORD_LIMITS[record_type]
 
         records = []
         offset = 0
@@ -33,7 +40,9 @@ class Connection:
         n_records = 0
 
         while batch_size > 0 and n_records <= n:
-            batch = self._query_album_batch(n=SPOTIPY_LIMIT, offset=offset)
+            batch = self._query_record_batch(
+                record_type, n=SPOTIPY_LIMIT, offset=offset
+            )
             batch_size = len(batch)
             if batch_size > 0:
                 records.extend(batch)
@@ -42,39 +51,23 @@ class Connection:
 
         return records
 
-    def _query_album_batch(self, offset: int, n: int = SPOTIPY_LIMIT) -> Dict:
+    def _query_record_batch(
+        self, record_type: str, offset: int = 0, n: int = SPOTIPY_LIMIT
+    ) -> Dict:
 
-        result = self._connection.current_user_saved_albums(
-            limit=n, offset=offset
-        )
-
-        return result["items"]
-
-    def query_user_tracks(self, n: int = DEFAULT_TRACK_LIMIT) -> List[Dict]:
-
-        records = []
-        offset = 0
-        batch_size = SPOTIPY_LIMIT
-        n_records = 0
-
-        while batch_size > 0 and n_records <= n:
-            batch = self._query_track_batch(n=SPOTIPY_LIMIT, offset=offset)
-            batch_size = len(batch)
-            if batch_size > 0:
-                records.extend(batch)
-            n_records += batch_size
-            offset += SPOTIPY_LIMIT
-
-        return records
-
-    def _query_track_batch(self, offset: int, n: int = SPOTIPY_LIMIT) -> Dict:
-
-        result = self._connection.current_user_saved_tracks(
-            limit=n, offset=offset
-        )
+        if record_type == "album":
+            result = self._connection.current_user_saved_albums(
+                limit=n, offset=offset
+            )
+        elif record_type == "artist":
+            raise NotImplementedError
+        elif record_type == "track":
+            result = self._connection.current_user_saved_tracks(
+                limit=n, offset=offset
+            )
 
         return result["items"]
-    
+
     def query_artist(self, id: str) -> Dict:
 
         result = self._connection.artist(id)

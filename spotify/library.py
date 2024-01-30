@@ -11,7 +11,6 @@ from PIL import Image, ImageStat
 import plotly.graph_objects as go
 
 from .connection import Connection
-from .constants import DEFAULT_ALBUM_LIMIT, DEFAULT_TRACK_LIMIT
 
 
 COLLAGE_COVER_DIM = 800
@@ -27,9 +26,10 @@ class Library:
         if not os.path.exists(self._cache_dir):
             os.makedirs(self._cache_dir)
 
-        self.artists = None
         self.albums = None
         self.tracks = None
+        self._artist_id_map = dict()
+        self.artists = None
 
         self.cover_dir = os.path.join(self._cache_dir, "album_covers/")
         self.collage_dir = os.path.join(self._cache_dir, "album_collages/")
@@ -41,18 +41,12 @@ class Library:
 
         return
 
-    def load_user_albums(
-        self,
-        query: bool = False,
-        n: int = DEFAULT_ALBUM_LIMIT,
-        sort_by: str = None
-    ):
+    def load_user_albums(self, query: bool = False, sort_by: str = None):
 
         cache_fp = os.path.join(self._cache_dir, "albums.csv")
         if query or not os.path.exists(cache_fp):
-            records = self._connection.query_user_albums(n=n)
+            records = self._connection.query_user_records("album")
             self.albums = self._parse_album_records(records)
-            self.albums.set_index("id", inplace=True)
             self.albums.to_csv(cache_fp)
         else:
             if self.albums is None:
@@ -60,14 +54,19 @@ class Library:
                     cache_fp,
                     converters={
                         "secondary_artists": literal_eval,
-                        "genres": literal_eval
+                        "secondary_artist_ids": literal_eval
                     }
                 ).set_index("id")
+
+        self._load_artists(self.albums.artist, self.albums.artist_id)
+        self._load_artists(
+            self.albums.secondary_artists, self.albums.secondary_artist_ids
+        )
 
         if sort_by is not None:
             self.albums.sort_values(sort_by, inplace=True)
 
-        return
+        return self.albums
 
     def _parse_album_records(self, album_records: List[Dict]) -> pd.DataFrame:
 
@@ -79,50 +78,52 @@ class Library:
             album["title"] = album_record["album"]["name"]
             album["type"] = album_record["album"]["album_type"]
             album["artist"] = album_record["album"]["artists"][0]["name"]
-            album["secondary_artists"] = list(set([
-                artist_record["name"]
-                for artist_record in album_record["album"]["artists"][1:]
-            ])) + list(set([
-                artist_record["name"]
-                for track in album_record["album"]["tracks"]["items"]
-                for artist_record in track["artists"]
-                if artist_record["name"] not in album["artist"]
-            ]))
-            album["genres"] = album_record["album"]["genres"]
+            album["artist_id"] = album_record["album"]["artists"][0]["id"]
+            secondary_artists = set()
+            for artist_record in album_record["album"]["artists"][1:]:
+                secondary_artists.add(
+                    (artist_record["name"], artist_record["id"])
+                )
+            for track_record in album_record["album"]["tracks"]["items"]:
+                for artist_record in track_record["artists"]:
+                    if artist_record["id"] == album["artist_id"]:
+                        continue
+                    secondary_artists.add(
+                        (artist_record["name"], artist_record["id"])
+                    )
+            album["secondary_artists"] = [x for (x, _) in secondary_artists]
+            album["secondary_artist_ids"] = [y for (_, y) in secondary_artists]
             album["released"] = pd.to_datetime(
                 album_record["album"]["release_date"]
             )
             album["cover_url"] = album_record["album"]["images"][0]["url"]
             albums.append(album)
 
-        return pd.DataFrame(albums)
+        return pd.DataFrame(albums).set_index("id")
 
-    def load_user_tracks(
-        self,
-        query: bool = False,
-        n: int = DEFAULT_TRACK_LIMIT,
-        sort_by: str = None
-    ):
+    def load_user_tracks(self, query: bool = False, sort_by: str = None):
 
         cache_fp = os.path.join(self._cache_dir, "tracks.csv")
         if query or not os.path.exists(cache_fp):
-            records = self._connection.query_user_tracks(n=n)
+            records = self._connection.query_user_records("track")
             self.tracks = self._parse_track_records(records)
-            self.tracks.set_index("id", inplace=True)
             self.tracks.to_csv(cache_fp)
         else:
             if self.tracks is None:
                 self.tracks = pd.read_csv(
                     cache_fp,
                     converters={
-                        "artists": literal_eval
+                        "artists": literal_eval,
+                        "artist_ids": literal_eval
                     }
                 ).set_index("id")
+
+        self._load_artists(self.tracks.artists, self.tracks.artist_ids)
 
         if sort_by is not None:
             self.tracks.sort_values(sort_by, inplace=True)
 
-        return
+        return self.tracks
 
     def _parse_track_records(self, track_records: List[Dict]) -> pd.DataFrame:
 
@@ -132,25 +133,56 @@ class Library:
             track = {}
             track["id"] = track_record["track"]["id"]
             track["title"] = track_record["track"]["name"]
-            track["artists"] = list(set([
-                artist_record["name"]
-                for artist_record in track_record["track"]["artists"]
-            ]))
+            artists = set()
+            for artist_record in track_record["track"]["artists"]:
+                artists.add((artist_record["name"], artist_record["id"]))
+            track["artists"] = [x for (x, _) in artists]
+            track["artist_ids"] = [y for (_, y) in artists]
             track["album"] = track_record["track"]["album"]["name"]
             track["album_id"] = track_record["track"]["album"]["id"]
             track["released"] = pd.to_datetime(
                 track_record["track"]["album"]["release_date"]
             )
-            track["genres"] = list(set([
-                genre for artist_record in [
-                    self._connection.query_artist(artist["id"])
-                    for artist in track_record["track"]["artists"]
-                ]
-                for genre in artist_record["genres"]
-            ]))
             tracks.append(track)
 
-        return pd.DataFrame(tracks)
+        return pd.DataFrame(tracks).set_index("id")
+
+    def _load_artists(self, artist_names: List[str], artist_ids: List[str]):
+
+        artists = []
+
+        for (artist_name, artist_id) in zip(artist_names, artist_ids):
+            artist = {}
+            if isinstance(artist_name, list) and isinstance(artist_id, list):
+                for i in range(len(artist_name)):
+                    artist["id"] = artist_id[i]
+                    artist["artist_name"] = artist_name[i]
+                    artists.append(artist)
+                    artist = {}
+            else:
+                artist["id"] = artist_id
+                artist["artist_name"] = artist_name
+                artists.append(artist)
+
+        artists_df = pd.DataFrame(artists).set_index("id")
+        if self.artists is None:
+            self.artists = artists_df
+        else:
+            self.artists = pd.concat([self.artists, artists_df])
+        self.artists.drop_duplicates(inplace=True)
+
+        self.artists.to_csv(os.path.join(self._cache_dir, "artists.csv"))
+
+        return
+
+    def load_artist_data(self):
+
+        self.artists["genres"] = self.artists.apply(
+            lambda x: self._connection.query_artist(x.name)["genres"], axis=1
+        )
+        self.artists.to_csv(os.path.join(self._cache_dir, "artists.csv"))
+
+        return
 
     def get_albums_by_artist(
         self, artist: str, include_secondary: bool = False
@@ -191,7 +223,7 @@ class Library:
         end_date: str = None,
         gradient: bool = False,
         fn: str = None
-    ):
+    ) -> str:
 
         n = dim ** 2
         albums = self.albums
@@ -224,10 +256,11 @@ class Library:
 
         if fn is None:
             fn = f"{str(int(time.time()))}.png"
-        collage.save(os.path.join(self.collage_dir, fn))
+        collage_fp = os.path.join(self.collage_dir, fn)
+        collage.save(collage_fp)
 
-        return
-    
+        return collage_fp
+
     def _pull_album_covers(self, albums: pd.DataFrame):
 
         for id, album in albums.iterrows():
@@ -235,9 +268,9 @@ class Library:
             if not os.path.exists(cover_fp):
                 with open(cover_fp, "wb") as f:
                     f.write(requests.get(album.cover_url).content)
-        
+
         return
-    
+
     def _load_cover_images(self, albums: pd.DataFrame) -> pd.Series:
 
         cover_imgs = albums.index.map(
@@ -249,7 +282,7 @@ class Library:
         )
 
         return cover_imgs
-    
+
     def _build_collage_image(self, albums: pd.DataFrame, dim: int) -> Image:
 
         collage_img = Image.new(
